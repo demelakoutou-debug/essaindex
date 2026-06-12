@@ -7,38 +7,20 @@
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: #fff; padding: 20px; }
         .container { max-width: 600px; margin: auto; background: #1a1a1a; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; margin-top: 0; }
-        h3 { color: #ccc; margin-top: 20px; border-bottom: 1px solid #222; padding-bottom: 5px; }
-        .btn { background: #ff444f; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .btn { background: #ff444f; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn:hover { background: #e03a44; }
         .btn-logout { background: #555; margin-left: 10px; }
-        .btn-logout:hover { background: #444; }
-        
-        /* Boutons de Trading */
-        .trade-actions { display: flex; gap: 15px; margin-top: 15px; }
-        .btn-trade { flex: 1; padding: 15px; font-size: 18px; text-transform: uppercase; }
-        .btn-rise { background: #2e7d32; }
-        .btn-rise:hover { background: #1b5e20; }
-        .btn-fall { background: #c62828; }
-        .btn-fall:hover { background: #b71c1c; }
-        
-        /* Formulaires et Sélections */
-        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px; }
-        label { font-size: 14px; color: #aaa; }
-        select, input { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
-        select:focus, input:focus { border-color: #ff444f; outline: none; }
-
-        #log-box { background: #000; color: #0f0; padding: 15px; height: 250px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; border: 1px solid #333; }
-        .status { font-weight: bold; padding: 5px; display: inline-block; border-radius: 3px; font-size: 14px; }
+        #log-box { background: #000; color: #0f0; padding: 15px; height: 300px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; }
+        .status { font-weight: bold; padding: 5px; display: inline-block; border-radius: 3px; }
         .online { background: #2e7d32; }
         .offline { background: #c62828; }
-        .panel-trading { background: #222; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #2a2a2a; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Deriv Bot Hub (API v2 Flux Privé/Public)</h2>
+    <h2>Deriv Bot Hub (API v2 Public Flux)</h2>
     
     <div>
         <p>Statut WebSocket : <span id="status" class="status offline">Déconnecté</span></p>
@@ -46,48 +28,21 @@
         <button id="logout-btn" class="btn btn-logout" style="display:none;">Déconnexion</button>
     </div>
 
-    <div id="trading-panel" class="panel-trading" style="display: none;">
-        <h3>Configuration de l'ordre</h3>
-        
-        <div class="form-group">
-            <label for="account-select">Sélection du Compte (<span style="color:#ffea00;">DOT</span> / <span style="color:#00e676;">ROT</span>)</label>
-            <select id="account-select">
-                <option value="">Chargement des comptes...</option>
-            </select>
-        </div>
-
-        <div class="form-group">
-            <label for="trade-stake">Stake (Montant de l'investissement)</label>
-            <input type="number" id="trade-stake" value="1.00" step="0.5" min="0.35">
-        </div>
-
-        <div class="trade-actions">
-            <button id="btn-rise" class="btn btn-trade btn-rise">▲ Rise (Achat)</button>
-            <button id="btn-fall" class="btn btn-trade btn-fall">▼ Fall (Vente)</button>
-        </div>
-    </div>
-
-    <h3>Flux de Marché & Logs d'exécution</h3>
-    <div id="log-box">Initialisation du système...</div>
+    <h3>Flux de Marché (Ticks en direct)</h3>
+    <div id="log-box">Initialisation du flux public...</div>
 </div>
 
 <script>
-    // 1. Configuration de l'application
+    // 1. Configuration stricte validée par le chatbot
     const CLIENT_ID = '33wQvUCQCGhOHXHJACSpO'; 
     const REDIRECT_URI = 'https://demelakoutou-debug.github.io/essaindex/'; 
 
     const authBtn = document.getElementById('auth-btn');
     const logoutBtn = document.getElementById('logout-btn');
-    const tradingPanel = document.getElementById('trading-panel');
-    const accountSelect = document.getElementById('account-select');
-    const stakeInput = document.getElementById('trade-stake');
-    const btnRise = document.getElementById('btn-rise');
-    const btnFall = document.getElementById('btn-fall');
     const statusEl = document.getElementById('status');
     const logBox = document.getElementById('log-box');
 
     let ws = null;
-    let activeToken = null;
 
     function log(msg, color = '#0f0') {
         const time = new Date().toLocaleTimeString();
@@ -95,7 +50,7 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
-    // --- OUTILS SÉCURITÉ PKCE ---
+    // --- OUTILS SÉCURITÉ PKCE (Utilisation de sessionStorage recommandée au Point 4) ---
     function generateRandomString(length) {
         const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
         let text = '';
@@ -113,28 +68,29 @@
             .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
 
-    // --- OAUTH2 CONNECT ---
+    // --- BOUTON DE CONNEXION OAUTH2 OBLIGATOIRE ---
     authBtn.addEventListener('click', async () => {
         const state = generateRandomString(16);
         const codeVerifier = generateRandomString(64);
         const codeChallenge = await generateCodeChallenge(codeVerifier);
 
+        // Stockage recommandé dans sessionStorage
         sessionStorage.setItem('oauth_state', state);
         sessionStorage.setItem('oauth_verifier', codeVerifier);
 
-        // Demande explicite des scopes requis pour lire les comptes et trader
-        const scope = 'read trade';
+        // Exigence Point 2 : Un seul scope 'trade'
+        const scope = 'trade';
 
         const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
                          `?response_type=code` +
                          `&client_id=${CLIENT_ID}` +
                          `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-                         `&scope=${encodeURIComponent(scope)}` +
+                         `&scope=${scope}` +
                          `&state=${state}` +
                          `&code_challenge=${codeChallenge}` +
                          `&code_challenge_method=S256`;
 
-        log("Redirection vers la mire d'autorisation Deriv...", "#ffea00");
+        log("Redirection vers la mire d'autorisation officielle...", "#ffea00");
         window.location.href = oauthUrl;
     });
 
@@ -142,87 +98,37 @@
     logoutBtn.addEventListener('click', () => {
         sessionStorage.clear();
         localStorage.removeItem('is_logged');
-        localStorage.removeItem('user_token');
         window.location.href = REDIRECT_URI;
     });
 
-    // --- CONNEXION ET LOGIQUE WEBSOCKET (FLUX PRIVÉ / TRADING) ---
-    function connectDerivWebSocket() {
-        log("Connexion à l'écosystème WebSocket de Deriv...", "#ffea00");
+    // --- SOUBSCRIPTION AU FLUX VIA LA NOUVELLE WEBSOCKET PUBLIQUE ---
+    function connectPublicWebSocket() {
+        log("Connexion à la nouvelle WebSocket publique de Deriv...", "#ffea00");
         
-        // Utilisation de l'endpoint standard permettant l'authentification et les requêtes privées
-        ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=' + CLIENT_ID);
+        // Nouvelle URL de l'écosystème Deriv (Point 1 & 6)
+        ws = new WebSocket('wss://api.derivws.com/trading/v1/options/ws/public');
 
         ws.onopen = () => {
             statusEl.className = "status online";
-            statusEl.innerText = "Connecté (Privé)";
-            log("WebSocket établie. Authentification de la session...", "#ffea00");
+            statusEl.innerText = "En ligne (Public)";
+            log("WebSocket connectée avec succès !", "#00e676");
             
-            // Envoyer la demande d'autorisation avec notre Token d'accès
-            ws.send(JSON.stringify({ authorize: activeToken }));
+            // Demande du flux de ticks (Pas besoin d'envoyer de message 'authorize' ici)
+            log("Souscription aux ticks en direct pour le Volatility 100...", "#ffea00");
+            ws.send(JSON.stringify({ ticks: 'R_100' }));
         };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            // 1. Retour de l'autorisation : Traitement des comptes DOT et ROT
-            if (data.msg_type === 'authorize') {
-                if (data.error) {
-                    log(`Erreur d'authentification : ${data.error.message}`, "#ff1744");
-                    localStorage.removeItem('is_logged');
-                    return;
-                }
-
-                log(`Bienvenue ${data.authorize.email} !`, "#00e676");
-                
-                // Nettoyage du select
-                accountSelect.innerHTML = "";
-                
-                // Parcours des comptes retournés par la nouvelle architecture v2
-                const accounts = data.authorize.account_list;
-                accounts.forEach(acc => {
-                    const isDemo = acc.loginid.startsWith('DOT');
-                    const isReal = acc.loginid.startsWith('ROT');
-                    
-                    // On filtre pour mettre en avant la nouvelle nomenclature demandée
-                    if (isDemo || isReal) {
-                        const typeLabel = isDemo ? "Compte Démo (DOT)" : "Compte Réel (ROT)";
-                        const option = document.createElement('option');
-                        option.value = acc.loginid;
-                        option.text = `${typeLabel} - ${acc.loginid} [${acc.balance} ${acc.currency}]`;
-                        accountSelect.appendChild(option);
-                    }
-                });
-
-                // Activer visuellement le panneau de trading complet
-                tradingPanel.style.display = 'block';
-
-                // Souscription parallèle au flux de ticks Volatility 100
-                log("Souscription aux ticks en direct pour le Volatility 100...", "#ffea00");
-                ws.send(JSON.stringify({ ticks: 'R_100' }));
-            }
-
-            // 2. Réception du flux de ticks en direct
+            // Gestion de la réception du flux v2
             if (data.msg_type === 'tick' && data.tick) {
-                // Raccourci d'affichage dans la console pour ne pas saturer visuellement
-                if(Math.random() > 0.4) { // Réduit légèrement la surcharge de logs à l'écran
-                    log(`[${data.tick.symbol}] Prix Spot Actuel : ${data.tick.quote}`, "#fff");
-                }
-            }
-
-            // 3. Retour de l'exécution de l'ordre d'achat (Buy)
-            if (data.msg_type === 'buy') {
-                if (data.error) {
-                    log(`❌ Échec de l'achat : ${data.error.message}`, "#ff1744");
-                } else {
-                    log(`✅ Ordre validé ! Contrat ID: ${data.buy.contract_id}`, "#00e676");
-                    log(`Détails : ${data.buy.longcode}`, "#fff");
-                }
+                log(`[${data.tick.symbol}] Prix Spot : ${data.tick.quote}`, "#fff");
             }
         };
 
         ws.onerror = (error) => {
-            log("Erreur critique sur la WebSocket.", "#ff1744");
+            log("Erreur sur la WebSocket publique.", "#ff1744");
             console.error(error);
         };
 
@@ -230,82 +136,40 @@
             statusEl.className = "status offline";
             statusEl.innerText = "Déconnecté";
             log("Connexion WebSocket fermée.", "#ff1744");
-            tradingPanel.style.display = 'none';
         };
     }
 
-    // --- FONCTION DE SOUFFLAGE D'ORDRE (RISE / FALL) ---
-    function placeOrder(contractType) {
-        const selectedAccount = accountSelect.value;
-        const stakeValue = parseFloat(stakeInput.value);
-
-        if (!selectedAccount) {
-            log("Erreur : Aucun compte sélectionné.", "#ff1744");
-            return;
-        }
-
-        log(`Envoi de l'ordre ${contractType} sur le compte ${selectedAccount} (${stakeValue} USD)...`, "#ffea00");
-
-        // Construction du payload pour exécuter un contrat immédiat (1 tick de durée par défaut)
-        const orderPayload = {
-            buy: 1,
-            price: stakeValue,
-            parameters: {
-                amount: stakeValue,
-                basis: 'stake',
-                contract_type: contractType, // 'CALL' pour Rise, 'PUT' pour Fall
-                currency: 'USD',
-                duration: 1,
-                duration_unit: 't', // 't' pour Ticks
-                symbol: 'R_100'     // Volatility 100 Index
-            }
-        };
-
-        // Si l'utilisateur a changé de compte dans le select, on peut spécifier au besoin, 
-        // mais l'API nécessite généralement d'avoir la session autorisée sur ce compte précis.
-        ws.send(JSON.stringify(orderPayload));
-    }
-
-    // Événements liés aux boutons d'achats
-    btnRise.addEventListener('click', () => placeOrder('CALL'));
-    btnFall.addEventListener('click', () => placeOrder('PUT'));
-
-    // --- INITIALISATION DE L'APPLICATION ---
+    // --- INITIALISATION AU CHARGEMENT DE LA PAGE ---
     function initBot() {
         logBox.innerHTML = "";
         const urlParams = new URLSearchParams(window.location.search);
         const code = urlParams.get('code');
         const state = urlParams.get('state');
 
-        // Gestion du retour d'autorisation OAuth2
+        // Au retour de la mire d'autorisation réussie
         if (code && state) {
             const savedState = sessionStorage.getItem('oauth_state');
             if (state !== savedState) {
-                log("Échec de la validation du paramètre 'state'.", "#ff1744");
+                log("Échec : Le paramètre state ne correspond pas.", "#ff1744");
                 return;
             }
             
             log("Authentification validée par l'écosystème Deriv !", "#00e676");
             localStorage.setItem('is_logged', 'true');
             
-            // Note technique : Dans une vraie architecture OAuth2 complète sans backend, 
-            // le 'code' est échangé contre un jeton persistant. Ici, nous l'utilisons directement comme token.
-            localStorage.setItem('user_token', code);
-            
-            // Nettoyage propre de l'URL
+            // Nettoyer l'URL proprement
             window.history.replaceState({}, document.title, REDIRECT_URI);
         }
 
-        // Si l'utilisateur est marqué connecté, on initialise la session privée
+        // Vérification si l'utilisateur est déjà passé par l'étape OAuth
         if (localStorage.getItem('is_logged') === 'true') {
-            activeToken = localStorage.getItem('user_token');
             authBtn.style.display = 'none';
             logoutBtn.style.display = 'inline-block';
             
-            // Lancement de la connexion avec gestion de compte
-            connectDerivWebSocket();
+            // Lancement du flux direct
+            connectPublicWebSocket();
         } else {
-            log("En attente. Veuillez cliquer sur le bouton de connexion pour lier vos comptes DOT/ROT.", "#fff");
+            log("Prêt. Veuillez cliquer sur le bouton rouge pour valider l'accès de l'application.", "#fff");
         }
     }
 
