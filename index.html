@@ -17,11 +17,15 @@
         .panel-trading { background: #222; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #2a2a2a; }
         .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px; }
         .form-group-inline { margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        .duration-container { display: flex; gap: 10px; }
+        .duration-container input { flex: 2; }
+        .duration-container select { flex: 1; }
         label { font-size: 14px; color: #aaa; }
         .form-group-inline label { cursor: pointer; user-select: none; }
         select, input[type="number"] { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
         select:focus, input:focus { border-color: #ff444f; outline: none; }
         input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: #ff444f; }
+        input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
         
         .trade-actions { display: flex; gap: 15px; margin-top: 15px; }
         .btn-trade { flex: 1; padding: 15px; font-size: 18px; text-transform: uppercase; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
@@ -67,7 +71,18 @@
             </select>
         </div>
 
-        <div class="form-group-inline">
+        <div class="form-group">
+            <label>Durée du Contrat</label>
+            <div class="duration-container">
+                <input type="number" id="trade-duration" value="1" min="1" step="1">
+                <select id="duration-unit">
+                    <option value="t">Ticks</option>
+                    <option value="s">Secondes</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group-inline" id="equal-group">
             <input type="checkbox" id="allow-equal">
             <label for="allow-equal">Accepter égalité (Allow Equal - CALLE/PUTE)</label>
         </div>
@@ -96,6 +111,8 @@
     const tradingPanel = document.getElementById('trading-panel');
     const accountSelect = document.getElementById('account-select');
     const marketSelect = document.getElementById('market-select');
+    const durationInput = document.getElementById('trade-duration');
+    const durationUnitSelect = document.getElementById('duration-unit');
     const allowEqualCheck = document.getElementById('allow-equal');
     const stakeInput = document.getElementById('trade-stake');
     const btnRise = document.getElementById('btn-rise');
@@ -105,7 +122,7 @@
 
     let ws = null;
     let accessToken = null;
-    let currentSymbol = '1HZ100V'; // Actif suivi par défaut
+    let currentSymbol = '1HZ100V';
 
     function log(msg, color = '#0f0') {
         const time = new Date().toLocaleTimeString();
@@ -113,7 +130,7 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
-    // --- OUTILS SÉCURITÉ PKCE ---
+    // --- SÉCURITÉ PKCE ---
     function generateRandomString(length) {
         const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
         let text = '';
@@ -131,7 +148,6 @@
             .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
 
-    // --- CONNEXION OAUTH2 ---
     authBtn.addEventListener('click', async () => {
         const state = generateRandomString(16);
         const codeVerifier = generateRandomString(64);
@@ -141,7 +157,6 @@
         sessionStorage.setItem('oauth_verifier', codeVerifier);
 
         const scope = 'trade';
-
         const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
                          `?response_type=code` +
                          `&client_id=${CLIENT_ID}` +
@@ -155,14 +170,13 @@
         window.location.href = oauthUrl;
     });
 
-    // --- DÉCONNEXION ---
     logoutBtn.addEventListener('click', () => {
         sessionStorage.clear();
         localStorage.clear();
         window.location.href = REDIRECT_URI;
     });
 
-    // --- ÉTAPE 3 : LISTER LES COMPTES (.data) ---
+    // --- GESTION COMPTES ---
     async function fetchDerivAccounts() {
         log("Récupération de la liste des comptes de trading via l'API REST...", "#ffea00");
         try {
@@ -189,7 +203,6 @@
             accounts.forEach(acc => {
                 const option = document.createElement('option');
                 option.value = acc.account_id; 
-                
                 let label = acc.account_type === 'demo' ? "Démo (DOT)" : "Réel (ROT)";
                 option.text = `${label} - ${acc.account_id} (${acc.currency || 'USD'})`;
                 accountSelect.appendChild(option);
@@ -206,7 +219,6 @@
         }
     }
 
-    // ÉTAPE 4 : CRÉATION PRÉVENTIVE SI COMPTE ABSENT
     async function createDerivAccount(type) {
         try {
             await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -223,7 +235,7 @@
         }
     }
 
-    // --- ÉTAPE 5 : DEMANDE DE L'OTP (.data.url) ---
+    // --- OTP & WEBSOCKET ---
     async function switchAccountSession(accountId) {
         if (ws) {
             log("Fermeture de la session précédente...", "#aaa");
@@ -261,7 +273,6 @@
         }
     }
 
-    // --- OUVERTURE DE LA WEBSOCKET AUTHENTIFIÉE ---
     function openAuthenticatedWebSocket(wsUrl) {
         ws = new WebSocket(wsUrl);
 
@@ -270,7 +281,6 @@
             statusEl.innerText = "En ligne (Sécurisé)";
             log(`WebSocket connectée ! Flux ouvert sur : ${marketSelect.options[marketSelect.selectedIndex].text}`, "#00e676");
 
-            // Récupère l'actif sélectionné pour s'abonner aux prix
             currentSymbol = marketSelect.value;
             ws.send(JSON.stringify({ ticks: currentSymbol }));
         };
@@ -278,14 +288,12 @@
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            // Réception des prix en temps réel
             if (data.msg_type === 'tick' && data.tick && data.tick.symbol === currentSymbol) {
                 if (Math.random() > 0.8) { 
                     log(`[${marketSelect.options[marketSelect.selectedIndex].text}] Spot : ${data.tick.quote}`, "#fff");
                 }
             }
 
-            // ÉTAPE 6 : PROPOSAL REÇU -> EXÉCUTION DE L'ACHAT
             if (data.msg_type === 'proposal' && data.proposal) {
                 log(`Proposition reçue ! Prix : ${data.proposal.ask_price}$`, "#ffea00");
                 log("Envoi de l'ordre d'achat final au marché...", "#ffea00");
@@ -297,7 +305,6 @@
                 }));
             }
 
-            // Réception du rapport final de transaction
             if (data.msg_type === 'buy') {
                 if (data.error) {
                     log(`❌ Échec de la transaction : ${data.error.message}`, "#ff1744");
@@ -319,7 +326,7 @@
         };
     }
 
-    // --- ÉTAPE 6 : INITIALISATION DU CONTRAT VIA PROPOSAL ---
+    // --- PARAMS & SOUMISSION PROPOSAL ---
     function triggerContractProposal(direction) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
             log("Erreur : Le bot n'est pas connecté.", "#ff1744");
@@ -327,15 +334,16 @@
         }
 
         const stake = parseFloat(stakeInput.value);
-        const isAllowEqual = allowEqualCheck.checked;
-        
-        // Détermination du type de contrat v2 précis (S'adapte si Allow Equal est coché)
+        const durationValue = parseInt(durationInput.value, 10);
+        const durationUnit = durationUnitSelect.value;
+        const isAllowEqual = allowEqualCheck.checked && durationUnit === 't'; // Validé uniquement si ticks
+
         let finalContractType = direction; 
         if (isAllowEqual) {
             finalContractType = (direction === 'CALL') ? 'CALLE' : 'PUTE';
         }
 
-        log(`Étape 1 : Demande de cotation [${finalContractType}] sur ${currentSymbol}...`, "#aaa");
+        log(`Étape 1 : Demande de cotation [${finalContractType}] (Durée: ${durationValue}${durationUnit}) sur ${currentSymbol}...`, "#aaa");
 
         ws.send(JSON.stringify({
             proposal: 1,
@@ -343,8 +351,8 @@
             basis: 'stake',
             contract_type: finalContractType, 
             currency: 'USD',
-            duration: 1,
-            duration_unit: 't', // 1 tick
+            duration: durationValue,
+            duration_unit: durationUnit, 
             underlying_symbol: currentSymbol,
             req_id: 1
         }));
@@ -353,11 +361,10 @@
     btnRise.addEventListener('click', () => triggerContractProposal('CALL'));
     btnFall.addEventListener('click', () => triggerContractProposal('PUT'));
 
-    // --- CHANGEMENT D'ACTIF / SYMBOLE DANS L'UI ---
+    // --- ÉCOUTEURS D'ÉVÉNEMENTS UI ---
     marketSelect.addEventListener('change', (e) => {
         if (ws && ws.readyState === WebSocket.OPEN) {
             log(`Désabonnement du flux précédent...`, "#aaa");
-            // Annuler l'ancien flux et s'abonner au nouveau
             ws.send(JSON.stringify({ forget_all: 'ticks' }));
             currentSymbol = e.target.value;
             log(`Changement d'actif vers : ${marketSelect.options[marketSelect.selectedIndex].text}`, "#ffea00");
@@ -365,11 +372,22 @@
         }
     });
 
+    // Sécurité : Désactiver Allow Equal si la durée est configurée en Secondes
+    durationUnitSelect.addEventListener('change', (e) => {
+        if (e.target.value === 's') {
+            allowEqualCheck.checked = false;
+            allowEqualCheck.disabled = true;
+            log("Note : L'option 'Allow Equal' n'est pas supportée pour les durées en secondes.", "#aaa");
+        } else {
+            allowEqualCheck.disabled = false;
+        }
+    });
+
     accountSelect.addEventListener('change', (e) => {
         switchAccountSession(e.target.value);
     });
 
-    // --- ÉTAPE 1 : ÉCHANGE DU CODE CONTRE ACCESS_TOKEN ---
+    // --- INITIALISATION SYSTEME ---
     async function initBot() {
         logBox.innerHTML = "";
         const urlParams = new URLSearchParams(window.location.search);
@@ -400,7 +418,6 @@
                 if (!resp.ok) throw new Error("Échec du serveur d'authentification Token.");
 
                 const tok = await resp.json();
-                
                 if (tok.access_token) {
                     log("Token Bearer officiel généré et stocké avec succès !", "#00e676");
                     localStorage.setItem('access_token', tok.access_token);
@@ -409,7 +426,6 @@
             } catch(err) {
                 log(`Erreur critique lors de l'échange de token : ${err.message}`, "#ff1744");
             }
-            
             window.history.replaceState({}, document.title, REDIRECT_URI);
         }
 
@@ -417,7 +433,6 @@
             accessToken = localStorage.getItem('access_token');
             authBtn.style.display = 'none';
             logoutBtn.style.display = 'inline-block';
-            
             fetchDerivAccounts();
         } else {
             log("Prêt. Veuillez vous connecter pour valider l'accès à l'application.", "#fff");
