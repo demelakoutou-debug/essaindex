@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deriv Mini-Bot Public API v2</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: #fff; padding: 20px; }
+        .container { max-width: 600px; margin: auto; background: #1a1a1a; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .btn { background: #ff444f; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn:hover { background: #e03a44; }
+        .btn-logout { background: #555; margin-left: 10px; }
+        #log-box { background: #000; color: #0f0; padding: 15px; height: 300px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; }
+        .status { font-weight: bold; padding: 5px; display: inline-block; border-radius: 3px; }
+        .online { background: #2e7d32; }
+        .offline { background: #c62828; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Deriv Bot Hub (API v2 Public Flux)</h2>
+    
+    <div>
+        <p>Statut WebSocket : <span id="status" class="status offline">Déconnecté</span></p>
+        <button id="auth-btn" class="btn">Se connecter avec Deriv</button>
+        <button id="logout-btn" class="btn btn-logout" style="display:none;">Déconnexion</button>
+    </div>
+
+    <h3>Flux de Marché (Ticks en direct)</h3>
+    <div id="log-box">Initialisation du flux public...</div>
+</div>
+
+<script>
+    // 1. Configuration stricte validée par le chatbot
+    const CLIENT_ID = '33wQvUCQCGhOHXHJACSpO'; 
+    const REDIRECT_URI = 'https://gilded-pavlova-01881e.netlify.app/'; 
+
+    const authBtn = document.getElementById('auth-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const statusEl = document.getElementById('status');
+    const logBox = document.getElementById('log-box');
+
+    let ws = null;
+
+    function log(msg, color = '#0f0') {
+        const time = new Date().toLocaleTimeString();
+        logBox.innerHTML += `<div style="color: ${color}">[${time}] ${msg}</div>`;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    // --- OUTILS SÉCURITÉ PKCE (Utilisation de sessionStorage recommandée au Point 4) ---
+    function generateRandomString(length) {
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+        let text = '';
+        for (let i = 0; i < length; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
+    }
+
+    async function generateCodeChallenge(codeVerifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(codeVerifier);
+        const digest = await window.crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode(...new Uint8Array(digest)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    // --- BOUTON DE CONNEXION OAUTH2 OBLIGATOIRE ---
+    authBtn.addEventListener('click', async () => {
+        const state = generateRandomString(16);
+        const codeVerifier = generateRandomString(64);
+        const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+        // Stockage recommandé dans sessionStorage
+        sessionStorage.setItem('oauth_state', state);
+        sessionStorage.setItem('oauth_verifier', codeVerifier);
+
+        // Exigence Point 2 : Un seul scope 'trade'
+        const scope = 'trade';
+
+        const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
+                         `?response_type=code` +
+                         `&client_id=${CLIENT_ID}` +
+                         `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+                         `&scope=${scope}` +
+                         `&state=${state}` +
+                         `&code_challenge=${codeChallenge}` +
+                         `&code_challenge_method=S256`;
+
+        log("Redirection vers la mire d'autorisation officielle...", "#ffea00");
+        window.location.href = oauthUrl;
+    });
+
+    // --- DÉCONNEXION ---
+    logoutBtn.addEventListener('click', () => {
+        sessionStorage.clear();
+        localStorage.removeItem('is_logged');
+        window.location.href = REDIRECT_URI;
+    });
+
+    // --- SOUBSCRIPTION AU FLUX VIA LA NOUVELLE WEBSOCKET PUBLIQUE ---
+    function connectPublicWebSocket() {
+        log("Connexion à la nouvelle WebSocket publique de Deriv...", "#ffea00");
+        
+        // Nouvelle URL de l'écosystème Deriv (Point 1 & 6)
+        ws = new WebSocket('wss://api.derivws.com/trading/v1/options/ws/public');
+
+        ws.onopen = () => {
+            statusEl.className = "status online";
+            statusEl.innerText = "En ligne (Public)";
+            log("WebSocket connectée avec succès !", "#00e676");
+            
+            // Demande du flux de ticks (Pas besoin d'envoyer de message 'authorize' ici)
+            log("Souscription aux ticks en direct pour le Volatility 100...", "#ffea00");
+            ws.send(JSON.stringify({ ticks: 'R_100' }));
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            // Gestion de la réception du flux v2
+            if (data.msg_type === 'tick' && data.tick) {
+                log(`[${data.tick.symbol}] Prix Spot : ${data.tick.quote}`, "#fff");
+            }
+        };
+
+        ws.onerror = (error) => {
+            log("Erreur sur la WebSocket publique.", "#ff1744");
+            console.error(error);
+        };
+
+        ws.onclose = () => {
+            statusEl.className = "status offline";
+            statusEl.innerText = "Déconnecté";
+            log("Connexion WebSocket fermée.", "#ff1744");
+        };
+    }
+
+    // --- INITIALISATION AU CHARGEMENT DE LA PAGE ---
+    function initBot() {
+        logBox.innerHTML = "";
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        const state = urlParams.get('state');
+
+        // Au retour de la mire d'autorisation réussie
+        if (code && state) {
+            const savedState = sessionStorage.getItem('oauth_state');
+            if (state !== savedState) {
+                log("Échec : Le paramètre state ne correspond pas.", "#ff1744");
+                return;
+            }
+            
+            log("Authentification validée par l'écosystème Deriv !", "#00e676");
+            localStorage.setItem('is_logged', 'true');
+            
+            // Nettoyer l'URL proprement
+            window.history.replaceState({}, document.title, REDIRECT_URI);
+        }
+
+        // Vérification si l'utilisateur est déjà passé par l'étape OAuth
+        if (localStorage.getItem('is_logged') === 'true') {
+            authBtn.style.display = 'none';
+            logoutBtn.style.display = 'inline-block';
+            
+            // Lancement du flux direct
+            connectPublicWebSocket();
+        } else {
+            log("Prêt. Veuillez cliquer sur le bouton rouge pour valider l'accès de l'application.", "#fff");
+        }
+    }
+
+    initBot();
+</script>
+
+</body>
+</html>
