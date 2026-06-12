@@ -16,9 +16,13 @@
         /* Panneau de trading style DTrader */
         .panel-trading { background: #222; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #2a2a2a; }
         .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px; }
+        .form-group-inline { margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
         label { font-size: 14px; color: #aaa; }
-        select, input { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
+        .form-group-inline label { cursor: pointer; user-select: none; }
+        select, input[type="number"] { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
         select:focus, input:focus { border-color: #ff444f; outline: none; }
+        input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: #ff444f; }
+        
         .trade-actions { display: flex; gap: 15px; margin-top: 15px; }
         .btn-trade { flex: 1; padding: 15px; font-size: 18px; text-transform: uppercase; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn-rise { background: #2e7d32; }
@@ -53,6 +57,22 @@
         </div>
 
         <div class="form-group">
+            <label for="market-select">Marché / Indice</label>
+            <select id="market-select">
+                <option value="1HZ100V">Volatility 100 Index</option>
+                <option value="stpRNG">Step 100</option>
+                <option value="stpRNG2">Step 200</option>
+                <option value="stpRNG3">Step 300</option>
+                <option value="stpRNG4">Step 400</option>
+            </select>
+        </div>
+
+        <div class="form-group-inline">
+            <input type="checkbox" id="allow-equal">
+            <label for="allow-equal">Accepter égalité (Allow Equal - CALLE/PUTE)</label>
+        </div>
+
+        <div class="form-group">
             <label for="trade-stake">Stake ($)</label>
             <input type="number" id="trade-stake" value="1.00" step="0.5" min="0.35">
         </div>
@@ -75,6 +95,8 @@
     const logoutBtn = document.getElementById('logout-btn');
     const tradingPanel = document.getElementById('trading-panel');
     const accountSelect = document.getElementById('account-select');
+    const marketSelect = document.getElementById('market-select');
+    const allowEqualCheck = document.getElementById('allow-equal');
     const stakeInput = document.getElementById('trade-stake');
     const btnRise = document.getElementById('btn-rise');
     const btnFall = document.getElementById('btn-fall');
@@ -83,6 +105,7 @@
 
     let ws = null;
     let accessToken = null;
+    let currentSymbol = '1HZ100V'; // Actif suivi par défaut
 
     function log(msg, color = '#0f0') {
         const time = new Date().toLocaleTimeString();
@@ -90,7 +113,7 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
-    // --- OUTILS SÉCURITÉ PKCE STRICTS ---
+    // --- OUTILS SÉCURITÉ PKCE ---
     function generateRandomString(length) {
         const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
         let text = '';
@@ -108,7 +131,7 @@
             .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
 
-    // --- BOUTON DE CONNEXION OAUTH2 ---
+    // --- CONNEXION OAUTH2 ---
     authBtn.addEventListener('click', async () => {
         const state = generateRandomString(16);
         const codeVerifier = generateRandomString(64);
@@ -139,7 +162,7 @@
         window.location.href = REDIRECT_URI;
     });
 
-    // --- ÉTAPE 3 : RÉCUPÉRATION DES COMPTES PAR INTERFACES ET PARSING (.data) ---
+    // --- ÉTAPE 3 : LISTER LES COMPTES (.data) ---
     async function fetchDerivAccounts() {
         log("Récupération de la liste des comptes de trading via l'API REST...", "#ffea00");
         try {
@@ -151,16 +174,14 @@
                 }
             });
 
-            if (!response.ok) {
-                throw new Error(`Erreur HTTP : ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`Erreur HTTP : ${response.status}`);
 
             const json = await response.json();
-            const accounts = json.data || []; // Extraction via le wrapper .data imposé
+            const accounts = json.data || []; 
             accountSelect.innerHTML = "";
 
             if (accounts.length === 0) {
-                log("Aucun compte actif trouvé. Tentative de création du compte de démonstration...", "#ffea00");
+                log("Aucun compte actif trouvé. Création du compte démo...", "#ffea00");
                 await createDerivAccount('demo');
                 return fetchDerivAccounts(); 
             }
@@ -185,7 +206,7 @@
         }
     }
 
-    // ÉTAPE 4 : CRÉATION PRÉVENTIVE DU COMPTE S'IL N'EXISTE PAS 
+    // ÉTAPE 4 : CRÉATION PRÉVENTIVE SI COMPTE ABSENT
     async function createDerivAccount(type) {
         try {
             await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -202,7 +223,7 @@
         }
     }
 
-    // --- ÉTAPE 5 : DEMANDE DE L'OTP ET SOUBSCRIPTION VIA PARSING (.data.url) ---
+    // --- ÉTAPE 5 : DEMANDE DE L'OTP (.data.url) ---
     async function switchAccountSession(accountId) {
         if (ws) {
             log("Fermeture de la session précédente...", "#aaa");
@@ -226,7 +247,7 @@
             }
 
             const otpData = await response.json();
-            const wsUrl = otpData.data?.url; // Correction critique ici : lecture de .data.url
+            const wsUrl = otpData.data?.url; 
 
             if (wsUrl) {
                 log("OTP validé. Connexion au canal sécurisé v2...", "#00e676");
@@ -240,33 +261,34 @@
         }
     }
 
-    // --- OUVERTURE ET TRAITEMENT DU FLUX SANS APPEL 'AUTHORIZE' ---
+    // --- OUVERTURE DE LA WEBSOCKET AUTHENTIFIÉE ---
     function openAuthenticatedWebSocket(wsUrl) {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             statusEl.className = "status online";
             statusEl.innerText = "En ligne (Sécurisé)";
-            log("WebSocket connectée et authentifiée !", "#00e676");
+            log(`WebSocket connectée ! Flux ouvert sur : ${marketSelect.options[marketSelect.selectedIndex].text}`, "#00e676");
 
-            // Souscription aux ticks du Volatility 100 via le symbole API v2
-            ws.send(JSON.stringify({ ticks: '1HZ100V' }));
+            // Récupère l'actif sélectionné pour s'abonner aux prix
+            currentSymbol = marketSelect.value;
+            ws.send(JSON.stringify({ ticks: currentSymbol }));
         };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            // Flux de prix en direct
-            if (data.msg_type === 'tick' && data.tick) {
-                if (Math.random() > 0.75) { 
-                    log(`[Volatility 100] Prix Spot : ${data.tick.quote}`, "#fff");
+            // Réception des prix en temps réel
+            if (data.msg_type === 'tick' && data.tick && data.tick.symbol === currentSymbol) {
+                if (Math.random() > 0.8) { 
+                    log(`[${marketSelect.options[marketSelect.selectedIndex].text}] Spot : ${data.tick.quote}`, "#fff");
                 }
             }
 
-            // ÉTAPE 6 : RÉCEPTION DU PROPOSAL ET PASSAGE DE L'ACHAT IMMÉDIAT
+            // ÉTAPE 6 : PROPOSAL REÇU -> EXÉCUTION DE L'ACHAT
             if (data.msg_type === 'proposal' && data.proposal) {
-                log(`Proposition reçue ! Prix d'achat calculé : ${data.proposal.ask_price}$`, "#ffea00");
-                log("Exécution finale de l'ordre sur le marché...", "#ffea00");
+                log(`Proposition reçue ! Prix : ${data.proposal.ask_price}$`, "#ffea00");
+                log("Envoi de l'ordre d'achat final au marché...", "#ffea00");
                 
                 ws.send(JSON.stringify({
                     buy: data.proposal.id,
@@ -275,12 +297,12 @@
                 }));
             }
 
-            // Réception du rapport d'exécution (Achat validé)
+            // Réception du rapport final de transaction
             if (data.msg_type === 'buy') {
                 if (data.error) {
-                    log(`❌ Échec : ${data.error.message}`, "#ff1744");
+                    log(`❌ Échec de la transaction : ${data.error.message}`, "#ff1744");
                 } else {
-                    log(`✅ Ordre exécuté ! ID Contrat : ${data.buy.contract_id}`, "#00e676");
+                    log(`✅ Contrat validé ! ID : ${data.buy.contract_id}`, "#00e676");
                     log(`${data.buy.longcode}`, "#aaa");
                 }
             }
@@ -297,25 +319,33 @@
         };
     }
 
-    // --- ÉTAPE 6 : INITIALISATION DU TRADING PAR LE "PROPOSAL" ---
-    function triggerContractProposal(contractType) {
+    // --- ÉTAPE 6 : INITIALISATION DU CONTRAT VIA PROPOSAL ---
+    function triggerContractProposal(direction) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
             log("Erreur : Le bot n'est pas connecté.", "#ff1744");
             return;
         }
 
         const stake = parseFloat(stakeInput.value);
-        log(`Étape 1 : Demande de cotation pour le contrat ${contractType === 'CALL' ? 'Rise' : 'Fall'}...`, "#aaa");
+        const isAllowEqual = allowEqualCheck.checked;
+        
+        // Détermination du type de contrat v2 précis (S'adapte si Allow Equal est coché)
+        let finalContractType = direction; 
+        if (isAllowEqual) {
+            finalContractType = (direction === 'CALL') ? 'CALLE' : 'PUTE';
+        }
+
+        log(`Étape 1 : Demande de cotation [${finalContractType}] sur ${currentSymbol}...`, "#aaa");
 
         ws.send(JSON.stringify({
             proposal: 1,
             amount: stake,
             basis: 'stake',
-            contract_type: contractType, 
+            contract_type: finalContractType, 
             currency: 'USD',
             duration: 1,
             duration_unit: 't', // 1 tick
-            underlying_symbol: '1HZ100V', // Symbole v2 strict
+            underlying_symbol: currentSymbol,
             req_id: 1
         }));
     }
@@ -323,11 +353,23 @@
     btnRise.addEventListener('click', () => triggerContractProposal('CALL'));
     btnFall.addEventListener('click', () => triggerContractProposal('PUT'));
 
+    // --- CHANGEMENT D'ACTIF / SYMBOLE DANS L'UI ---
+    marketSelect.addEventListener('change', (e) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            log(`Désabonnement du flux précédent...`, "#aaa");
+            // Annuler l'ancien flux et s'abonner au nouveau
+            ws.send(JSON.stringify({ forget_all: 'ticks' }));
+            currentSymbol = e.target.value;
+            log(`Changement d'actif vers : ${marketSelect.options[marketSelect.selectedIndex].text}`, "#ffea00");
+            ws.send(JSON.stringify({ ticks: currentSymbol }));
+        }
+    });
+
     accountSelect.addEventListener('change', (e) => {
         switchAccountSession(e.target.value);
     });
 
-    // --- ÉTAPE 1 : CONVERSION DU CODE OAUTH EN VÉRITABLE ACCESS_TOKEN ---
+    // --- ÉTAPE 1 : ÉCHANGE DU CODE CONTRE ACCESS_TOKEN ---
     async function initBot() {
         logBox.innerHTML = "";
         const urlParams = new URLSearchParams(window.location.search);
@@ -376,7 +418,6 @@
             authBtn.style.display = 'none';
             logoutBtn.style.display = 'inline-block';
             
-            // Lancement du flux REST
             fetchDerivAccounts();
         } else {
             log("Prêt. Veuillez vous connecter pour valider l'accès à l'application.", "#fff");
