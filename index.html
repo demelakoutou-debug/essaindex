@@ -90,14 +90,43 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
-    // --- CONNEXION OAUTH2 REVISITÉE POUR ÉVITER LE 401 ---
-    authBtn.addEventListener('click', () => {
-        // En utilisant l'URL d'authentification directe de l'application Deriv,
-        // Deriv renvoie directement des tokens d'accès valides pour chaque compte dans les paramètres de l'URL.
+    // --- OUTILS PKCE (Garde ton authenticité de départ) ---
+    function generateRandomString(length) {
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+        let text = '';
+        for (let i = 0; i < length; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
+    }
+
+    async function generateCodeChallenge(codeVerifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(codeVerifier);
+        const digest = await window.crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode(...new Uint8Array(digest)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    // --- BOUTON DE CONNEXION OAUTH2 RECORRIGÉ ---
+    authBtn.addEventListener('click', async () => {
+        const state = generateRandomString(16);
+        const codeVerifier = generateRandomString(64);
+        const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+        sessionStorage.setItem('oauth_state', state);
+        sessionStorage.setItem('oauth_verifier', codeVerifier);
+
+        const scope = 'trade';
+
         const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
-                         `?client_id=${CLIENT_ID}` +
+                         `?response_type=code` +
+                         `&client_id=${CLIENT_ID}` +
                          `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-                         `&l=fr`;
+                         `&scope=${scope}` +
+                         `&state=${state}` +
+                         `&code_challenge=${codeChallenge}` +
+                         `&code_challenge_method=S256`;
 
         log("Redirection vers la mire d'autorisation officielle...", "#ffea00");
         window.location.href = oauthUrl;
@@ -110,7 +139,7 @@
         window.location.href = REDIRECT_URI;
     });
 
-    // --- ÉTAPE 1 : RÉCUPÉRATION DES COMPTES DE TRADING OPTIONS (REST) ---
+    // --- ÉTAPE 1 & 2 : RÉCUPÉRATION ET ENREGISTREMENT DES COMPTES (REST) ---
     async function fetchDerivAccounts() {
         log("Récupération de la liste des comptes de trading via l'API REST...", "#ffea00");
         try {
@@ -123,9 +152,6 @@
             });
 
             if (!response.ok) {
-                if (response.status === 401) {
-                    throw new Error("Jeton d'accès expiré ou non autorisé (401). Veuillez vous reconnecter.");
-                }
                 throw new Error(`Erreur HTTP : ${response.status}`);
             }
 
@@ -133,25 +159,26 @@
             accountSelect.innerHTML = "";
 
             if (!accounts || accounts.length === 0) {
-                log("Aucun compte trouvé. Création d'un compte de démonstration en cours...", "#ffea00");
+                log("Aucun compte actif trouvé. Tentative de création d'un compte de test...", "#ffea00");
+                // Optionnel : Étape 2 automatique si aucun compte n'est retourné
                 await createDerivAccount('demo');
-                return fetchDerivAccounts();
+                return fetchDerivAccounts(); // Recharge la liste
             }
 
             accounts.forEach(acc => {
                 const option = document.createElement('option');
-                option.value = acc.account_id;
+                option.value = acc.account_id; // Cet ID sert pour l'appel OTP
                 
                 let label = acc.account_type === 'demo' ? "Démo (DOT)" : "Réel (ROT)";
                 option.text = `${label} - ${acc.account_id} (${acc.currency || 'USD'})`;
                 accountSelect.appendChild(option);
             });
 
-            // Rendre le panneau visible
+            // Afficher l'interface de trading
             tradingPanel.style.display = 'block';
 
-            // Lancement automatique de l'OTP pour le compte sélectionné par défaut
-            if (accountSelect.value) {
+            // Établir directement la connexion pour le premier compte de la liste
+            if(accountSelect.value) {
                 switchAccountSession(accountSelect.value);
             }
 
@@ -160,7 +187,7 @@
         }
     }
 
-    // ÉTAPE 2 : CRÉATION PRÉVENTIVE DU COMPTE OPTIONS
+    // ÉTAPES UNIQUE 2 : CRÉATION DU COMPTE SI ABSENT
     async function createDerivAccount(type) {
         try {
             await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -173,11 +200,11 @@
                 body: JSON.stringify({ currency: "USD", group: "row", account_type: type })
             });
         } catch(e) {
-            console.error(e);
+            console.error("Erreur création compte préventif", e);
         }
     }
 
-    // --- ÉTAPE 3 : DEMANDE DE L'OTP POUR LE COMPTE SÉLECTIONNÉ ---
+    // --- ÉTAPE 3 & 4 : DEMANDE DE L'OTP ET OUVERTURE DE LA WEBSOCKET PRIVÉE ---
     async function switchAccountSession(accountId) {
         if (ws) {
             log("Fermeture de la session précédente...", "#aaa");
@@ -202,40 +229,43 @@
 
             const otpData = await response.json();
             
+            // L'API renvoie l'URL WebSocket authentifiée sous la clé otpData.url
             if (otpData && otpData.url) {
-                log("OTP validé avec succès. Initialisation du canal de trading...", "#00e676");
+                log("OTP validé. Ouverture du canal WebSocket sécurisé...", "#00e676");
                 openAuthenticatedWebSocket(otpData.url);
             } else {
-                throw new Error("L'API n'a pas renvoyé d'URL WebSocket.");
+                throw new Error("L'API n'a renvoyé aucune URL valide.");
             }
 
         } catch (error) {
-            log(`Échec du chargement de la session de trading : ${error.message}`, "#ff1744");
+            log(`Échec de la bascule de session (OTP) : ${error.message}`, "#ff1744");
         }
     }
 
-    // --- ÉTAPE 4 : OUVERTURE DE LA WEBSOCKET AVEC L'URL INTERNE DE L'OTP ---
+    // --- OUVERTURE DE LA WS AUTHENTIFIÉE SANS ENVOI DE MESSAGE 'AUTHORIZE' ---
     function openAuthenticatedWebSocket(wsUrl) {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             statusEl.className = "status online";
-            statusEl.innerText = "En ligne (Trading Actif)";
-            log("WebSocket connectée et authentifiée via OTP !", "#00e676");
+            statusEl.innerText = "En ligne (Sécurisé)";
+            log("Connexion WebSocket établie et pré-authentifiée !", "#00e676");
 
-            // Souscription au flux de ticks standard
+            // Souscription immédiate au flux public/privé de ticks
             ws.send(JSON.stringify({ ticks: 'R_100' }));
         };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
+            // Gestion des ticks
             if (data.msg_type === 'tick' && data.tick) {
                 if (Math.random() > 0.7) { 
                     log(`[${data.tick.symbol}] Prix Actuel : ${data.tick.quote}`, "#fff");
                 }
             }
 
+            // Gestion des retours d'achats (Rise / Fall)
             if (data.msg_type === 'buy') {
                 if (data.error) {
                     log(`❌ Échec de la transaction : ${data.error.message}`, "#ff1744");
@@ -247,20 +277,20 @@
         };
 
         ws.onerror = (error) => {
-            log("Erreur détectée sur la WebSocket de trading.", "#ff1744");
+            log("Erreur critique détectée sur la WebSocket.", "#ff1744");
         };
 
         ws.onclose = () => {
             statusEl.className = "status offline";
             statusEl.innerText = "Déconnecté";
-            log("WebSocket fermée proprement.", "#ff1744");
+            log("WebSocket fermée.", "#ff1744");
         };
     }
 
-    // --- PASSAGE D'ORDRES ---
+    // --- GESTION DU TRADING (RISE / FALL) ---
     function placeOrder(contractType) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-            log("Erreur : Le canal de trading n'est pas actif.", "#ff1744");
+            log("Erreur : La WebSocket n'est pas connectée.", "#ff1744");
             return;
         }
 
@@ -273,10 +303,10 @@
             parameters: {
                 amount: stake,
                 basis: 'stake',
-                contract_type: contractType,
+                contract_type: contractType, // 'CALL' pour Rise, 'PUT' pour Fall
                 currency: 'USD',
                 duration: 1,
-                duration_unit: 't',
+                duration_unit: 't', // Exécution en 1 tick
                 symbol: 'R_100'
             }
         };
@@ -287,34 +317,29 @@
     btnRise.addEventListener('click', () => placeOrder('CALL'));
     btnFall.addEventListener('click', () => placeOrder('PUT'));
 
+    // --- SUR CHANGEMENT DE COMPTE DANS L'UI (SELECT) ---
     accountSelect.addEventListener('change', (e) => {
         switchAccountSession(e.target.value);
     });
 
-    // --- ANALYSE ET ENREGISTREMENT DES SESSIONS ---
+    // --- INITIALISATION AU CHARGEMENT DE LA PAGE ---
     function initBot() {
         logBox.innerHTML = "";
         const urlParams = new URLSearchParams(window.location.search);
-        
-        // Extraction des paramètres injectés par l'URL d'authentification classique (acct1, token1...)
-        let index = 1;
-        let hasParams = false;
-        let mainToken = null;
+        const code = urlParams.get('code');
+        const state = urlParams.get('state');
 
-        while (urlParams.get(`acct${index}`)) {
-            hasParams = true;
-            if (index === 1) {
-                // On utilise le token principal du premier compte retourné pour requêter l'API REST
-                mainToken = urlParams.get(`token${index}`);
+        if (code && state) {
+            const savedState = sessionStorage.getItem('oauth_state');
+            if (state !== savedState) {
+                log("Échec : Le paramètre state ne correspond pas.", "#ff1744");
+                return;
             }
-            index++;
-        }
-
-        if (hasParams && mainToken) {
-            localStorage.setItem('access_token', mainToken);
+            
+            log("Authentification approuvée par Deriv !", "#00e676");
+            localStorage.setItem('access_token', code);
             localStorage.setItem('is_logged', 'true');
             
-            // Nettoyage de l'URL pour cacher les tokens
             window.history.replaceState({}, document.title, REDIRECT_URI);
         }
 
@@ -323,10 +348,10 @@
             authBtn.style.display = 'none';
             logoutBtn.style.display = 'inline-block';
             
-            // Lancement du flux REST vers OTP
+            // On lance l'étape 1 (REST)
             fetchDerivAccounts();
         } else {
-            log("Prêt. Veuillez cliquer sur le bouton de connexion pour lier vos comptes DOT/ROT.", "#fff");
+            log("Prêt. Veuillez vous connecter avec le bouton pour démarrer l'autorisation OTP.", "#fff");
         }
     }
 
