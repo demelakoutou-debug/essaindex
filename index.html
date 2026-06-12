@@ -85,7 +85,7 @@
     const logBox = document.getElementById('log-box');
 
     let ws = null;
-    let userAccounts = []; // Stockage local des comptes détectés (DOT / ROT)
+    let userAccounts = []; 
 
     function log(msg, color = '#0f0') {
         const time = new Date().toLocaleTimeString();
@@ -93,10 +93,13 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
-    // --- CONNEXION SÉCURISÉE OAUTH2 (Retour à ta méthode fonctionnelle) ---
+    // --- CONNEXION SÉCURISÉE OAUTH2 (Correction "invalid_client") ---
     authBtn.addEventListener('click', () => {
-        // L'URL d'authentification standard de l'application Deriv
-        const oauthUrl = `https://auth.deriv.com/oauth2/auth?app_id=${CLIENT_ID}&l=fr`;
+        const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
+                         `?client_id=${CLIENT_ID}` + 
+                         `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` + 
+                         `&l=fr`;
+                         
         log("Redirection vers la mire d'autorisation Deriv...", "#ffea00");
         window.location.href = oauthUrl;
     });
@@ -118,7 +121,6 @@
             statusEl.innerText = "En ligne";
             log("WebSocket ouverte avec succès.", "#00e676");
 
-            // Authentification automatique du compte actuellement sélectionné au démarrage
             const activeToken = localStorage.getItem('active_token');
             if (activeToken) {
                 log("Authentification de la session en cours...", "#ffea00");
@@ -137,13 +139,13 @@
                 }
                 log(`Session autorisée pour : ${data.authorize.email}`, "#00e676");
                 
-                // Souscription automatique au flux Step Index / Volatility après autorisation
+                // Souscription au flux Volatility 100
                 ws.send(JSON.stringify({ ticks: 'R_100' }));
             }
 
             // 2. Réception des Ticks
             if (data.msg_type === 'tick' && data.tick) {
-                if (Math.random() > 0.7) { // Évite de saturer visuellement la boîte de logs
+                if (Math.random() > 0.7) { 
                     log(`[${data.tick.symbol}] Prix Spot : ${data.tick.quote}`, "#fff");
                 }
             }
@@ -203,7 +205,7 @@
             log(`Bascule sur le compte ${selectedId}...`, "#ffea00");
             localStorage.setItem('active_token', targetAccount.token);
             
-            // Reconnexion de la WebSocket pour appliquer l'autorisation du nouveau compte sélectionné
+            // Reconnexion pour appliquer le bon token d'autorisation
             if (ws) ws.close();
             connectWebSocket();
         }
@@ -213,11 +215,11 @@
     function init() {
         const urlParams = new URLSearchParams(window.location.search);
         
-        // Deriv renvoie les paramètres sous la forme acct1, token1, acct2, token2...
         let index = 1;
         let hasParams = false;
         let extractedAccounts = [];
 
+        // Récupération de la liste des comptes injectés dans l'URL par le redirect Deriv
         while (urlParams.get(`acct${index}`)) {
             hasParams = true;
             const id = urlParams.get(`acct${index}`);
@@ -228,18 +230,16 @@
             index++;
         }
 
-        // Si on détecte de nouveaux paramètres suite à une connexion réussie
         if (hasParams) {
             localStorage.setItem('user_accounts', JSON.stringify(extractedAccounts));
-            // Par défaut, le premier compte devient le compte actif
             localStorage.setItem('active_token', extractedAccounts[0].token);
             localStorage.setItem('is_logged', 'true');
             
-            // Nettoyage de l'URL pour retirer les tokens visibles
+            // Nettoyage de l'URL
             window.history.replaceState({}, document.title, REDIRECT_URI);
         }
 
-        // Chargement de la session si l'utilisateur est connecté
+        // Si session active, construction de l'UI de trading
         if (localStorage.getItem('is_logged') === 'true') {
             userAccounts = JSON.parse(localStorage.getItem('user_accounts')) || [];
             const activeToken = localStorage.getItem('active_token');
@@ -248,26 +248,22 @@
             logoutBtn.style.display = 'inline-block';
             tradingPanel.style.display = 'block';
 
-            // Remplissage du menu déroulant avec la distinction DOT / ROT
             accountSelect.innerHTML = "";
             userAccounts.forEach(acc => {
                 const option = document.createElement('option');
                 option.value = acc.id;
                 
-                // Détection de la nomenclature DOT/ROT
+                // Reconnaissance explicite des nouveaux comptes DOT (Demo) et ROT (Real)
                 let prefixLabel = "Compte";
                 if (acc.id.startsWith('DOT')) prefixLabel = "Démo (DOT)";
                 if (acc.id.startsWith('ROT')) prefixLabel = "Réel (ROT)";
 
                 option.text = `${prefixLabel} - ${acc.id} (${acc.cur})`;
-                
-                // Sélectionner visuellement le compte actif
                 if (acc.token === activeToken) option.selected = true;
 
                 accountSelect.appendChild(option);
             });
 
-            // Lancement de la connexion
             connectWebSocket();
         } else {
             log("Prêt. Veuillez vous connecter pour charger vos comptes.", "#fff");
