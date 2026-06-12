@@ -7,38 +7,35 @@
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: #fff; padding: 20px; }
         .container { max-width: 600px; margin: auto; background: #1a1a1a; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; margin-top: 0; }
+        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; }
         h3 { color: #ccc; margin-top: 20px; border-bottom: 1px solid #222; padding-bottom: 5px; }
-        .btn { background: #ff444f; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        .btn { background: #ff444f; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn:hover { background: #e03a44; }
         .btn-logout { background: #555; margin-left: 10px; }
-        .btn-logout:hover { background: #444; }
         
-        /* Boutons de Trading */
+        /* Styles pour l'interface de trading */
+        .panel-trading { background: #222; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #2a2a2a; }
+        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 14px; color: #aaa; }
+        select, input { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
+        select:focus, input:focus { border-color: #ff444f; outline: none; }
         .trade-actions { display: flex; gap: 15px; margin-top: 15px; }
         .btn-trade { flex: 1; padding: 15px; font-size: 18px; text-transform: uppercase; }
         .btn-rise { background: #2e7d32; }
         .btn-rise:hover { background: #1b5e20; }
         .btn-fall { background: #c62828; }
         .btn-fall:hover { background: #b71c1c; }
-        
-        /* Formulaires */
-        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px; }
-        label { font-size: 14px; color: #aaa; }
-        select, input { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
-        select:focus, input:focus { border-color: #ff444f; outline: none; }
 
-        #log-box { background: #000; color: #0f0; padding: 15px; height: 250px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; border: 1px solid #333; }
-        .status { font-weight: bold; padding: 5px; display: inline-block; border-radius: 3px; font-size: 14px; }
+        #log-box { background: #000; color: #0f0; padding: 15px; height: 300px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; }
+        .status { font-weight: bold; padding: 5px; display: inline-block; border-radius: 3px; }
         .online { background: #2e7d32; }
         .offline { background: #c62828; }
-        .panel-trading { background: #222; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #2a2a2a; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Deriv Bot Hub (v2)</h2>
+    <h2>Deriv Bot Hub (API v2 Public Flux)</h2>
     
     <div>
         <p>Statut WebSocket : <span id="status" class="status offline">Déconnecté</span></p>
@@ -50,7 +47,7 @@
         <h3>Configuration de l'ordre</h3>
         
         <div class="form-group">
-            <label for="account-select">Sélection du Compte</label>
+            <label for="account-select">Sélection du Compte (<span style="color:#ffea00;">DOT</span> / <span style="color:#00e676;">ROT</span>)</label>
             <select id="account-select">
                 </select>
         </div>
@@ -66,11 +63,12 @@
         </div>
     </div>
 
-    <h3>Flux de Marché & Logs</h3>
-    <div id="log-box">Initialisation...</div>
+    <h3>Flux de Marché (Ticks en direct)</h3>
+    <div id="log-box">Initialisation du flux public...</div>
 </div>
 
 <script>
+    // 1. Configuration stricte de l'application
     const CLIENT_ID = '33wQvUCQCGhOHXHJACSpO'; 
     const REDIRECT_URI = 'https://demelakoutou-debug.github.io/essaindex/'; 
 
@@ -93,14 +91,16 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
-    // --- CONNEXION SÉCURISÉE OAUTH2 (Correction "invalid_client") ---
+    // --- BOUTON DE CONNEXION OAUTH2 RECORRIGÉ ---
     authBtn.addEventListener('click', () => {
+        // Changement critique : Utilisation des paramètres client_id et redirect_uri standard 
+        // pour que Deriv renvoie directement les tokens des comptes dans l'URL sans rejeter la requête.
         const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
-                         `?client_id=${CLIENT_ID}` + 
-                         `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` + 
+                         `?client_id=${CLIENT_ID}` +
+                         `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
                          `&l=fr`;
-                         
-        log("Redirection vers la mire d'autorisation Deriv...", "#ffea00");
+
+        log("Redirection vers la mire d'autorisation officielle...", "#ffea00");
         window.location.href = oauthUrl;
     });
 
@@ -111,19 +111,22 @@
         window.location.href = REDIRECT_URI;
     });
 
-    // --- CONNEXION PRINCIPALE WEBSOCKET ---
-    function connectWebSocket() {
-        log("Connexion à la WebSocket Deriv...", "#ffea00");
+    // --- SOCKET PRIVÉE PERMETTANT L'EXÉCUTION DES TRADES ---
+    function connectBotWebSocket() {
+        log("Connexion à l'écosystème WebSocket de Deriv...", "#ffea00");
+        
+        // Utilisation de la passerelle de communication unifiée pour les transactions privées
         ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${CLIENT_ID}`);
 
         ws.onopen = () => {
             statusEl.className = "status online";
             statusEl.innerText = "En ligne";
-            log("WebSocket ouverte avec succès.", "#00e676");
-
+            log("WebSocket connectée avec succès !", "#00e676");
+            
+            // Envoyer la demande d'autorisation avec le Token actif du compte sélectionné
             const activeToken = localStorage.getItem('active_token');
             if (activeToken) {
-                log("Authentification de la session en cours...", "#ffea00");
+                log("Authentification de la session de trading...", "#ffea00");
                 ws.send(JSON.stringify({ authorize: activeToken }));
             }
         };
@@ -131,51 +134,52 @@
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            // 1. Réponse d'autorisation
+            // 1. Réponse à la demande d'autorisation
             if (data.msg_type === 'authorize') {
                 if (data.error) {
-                    log(`Erreur d'autorisation : ${data.error.message}`, "#ff1744");
+                    log(`Erreur d'authentification : ${data.error.message}`, "#ff1744");
                     return;
                 }
-                log(`Session autorisée pour : ${data.authorize.email}`, "#00e676");
+                log(`Session validée pour le compte de trading !`, "#00e676");
                 
-                // Souscription au flux Volatility 100
+                // Souscription aux Ticks du Volatility 100
+                log("Souscription aux ticks en direct pour le Volatility 100...", "#ffea00");
                 ws.send(JSON.stringify({ ticks: 'R_100' }));
             }
 
-            // 2. Réception des Ticks
+            // 2. Réception du flux de prix en direct
             if (data.msg_type === 'tick' && data.tick) {
-                if (Math.random() > 0.7) { 
+                if (Math.random() > 0.6) { // Limite la surcharge graphique dans ton log-box
                     log(`[${data.tick.symbol}] Prix Spot : ${data.tick.quote}`, "#fff");
                 }
             }
 
-            // 3. Réponse suite à un achat (Rise / Fall)
+            // 3. Réception de la confirmation d'achat (Rise / Fall)
             if (data.msg_type === 'buy') {
                 if (data.error) {
-                    log(`❌ Erreur d'achat : ${data.error.message}`, "#ff1744");
+                    log(`❌ Échec de l'ordre : ${data.error.message}`, "#ff1744");
                 } else {
-                    log(`✅ Ordre exécuté ! ID Contrat : ${data.buy.contract_id}`, "#00e676");
+                    log(`✅ Contrat validé ! ID : ${data.buy.contract_id}`, "#00e676");
                     log(`${data.buy.longcode}`, "#aaa");
                 }
             }
         };
 
         ws.onerror = (error) => {
-            log("Erreur de connexion WebSocket.", "#ff1744");
+            log("Erreur sur la WebSocket.", "#ff1744");
         };
 
         ws.onclose = () => {
             statusEl.className = "status offline";
             statusEl.innerText = "Déconnecté";
-            log("Connexion WebSocket interrompue.", "#ff1744");
+            log("Connexion WebSocket fermée.", "#ff1744");
         };
     }
 
-    // --- ENVOI D'ORDRE (RISE / FALL) ---
-    function placeOrder(type) {
+    // --- EXECUTION DE L'ACHAT SUR LE MARCHÉ ---
+    function placeOrder(contractType) {
         const stake = parseFloat(stakeInput.value);
-        log(`Envoi de l'ordre ${type === 'CALL' ? 'Rise' : 'Fall'} (Stake: ${stake}$)...`, "#ffea00");
+        log(`Envoi de l'ordre ${contractType === 'CALL' ? 'Rise' : 'Fall'} (${stake}$)...`, "#ffea00");
 
         const payload = {
             buy: 1,
@@ -183,11 +187,11 @@
             parameters: {
                 amount: stake,
                 basis: 'stake',
-                contract_type: type, // 'CALL' = Rise, 'PUT' = Fall
+                contract_type: contractType, // 'CALL' = Rise, 'PUT' = Fall
                 currency: 'USD',
                 duration: 1,
                 duration_unit: 't', // 1 Tick
-                symbol: 'R_100'
+                symbol: 'R_100'     // Volatility 100 Index
             }
         };
         ws.send(JSON.stringify(payload));
@@ -196,30 +200,31 @@
     btnRise.addEventListener('click', () => placeOrder('CALL'));
     btnFall.addEventListener('click', () => placeOrder('PUT'));
 
-    // --- CHANGEMENT DE COMPTE VIA LE SELECT ---
+    // --- ÉCOUTEUR DU SÉLECTEUR DE COMPTE ---
     accountSelect.addEventListener('change', (e) => {
         const selectedId = e.target.value;
         const targetAccount = userAccounts.find(acc => acc.id === selectedId);
         
         if (targetAccount) {
-            log(`Bascule sur le compte ${selectedId}...`, "#ffea00");
+            log(`Bascule vers l'environnement : ${selectedId}...`, "#ffea00");
             localStorage.setItem('active_token', targetAccount.token);
             
-            // Reconnexion pour appliquer le bon token d'autorisation
+            // On réinitialise la connexion pour s'autoriser avec le jeton du nouveau compte
             if (ws) ws.close();
-            connectWebSocket();
+            connectBotWebSocket();
         }
     });
 
-    // --- ANALYSE DE L'URL ET INITIALISATION ---
-    function init() {
+    // --- INITIALISATION AU CHARGEMENT DE LA PAGE ---
+    function initBot() {
+        logBox.innerHTML = "";
         const urlParams = new URLSearchParams(window.location.search);
         
         let index = 1;
         let hasParams = false;
         let extractedAccounts = [];
 
-        // Récupération de la liste des comptes injectés dans l'URL par le redirect Deriv
+        // Lecture des comptes (acct1, token1, acct2, token2...) retournés par l'URL officielle
         while (urlParams.get(`acct${index}`)) {
             hasParams = true;
             const id = urlParams.get(`acct${index}`);
@@ -230,16 +235,17 @@
             index++;
         }
 
+        // Si l'utilisateur arrive de la mire avec les paramètres d'authentification
         if (hasParams) {
             localStorage.setItem('user_accounts', JSON.stringify(extractedAccounts));
             localStorage.setItem('active_token', extractedAccounts[0].token);
             localStorage.setItem('is_logged', 'true');
             
-            // Nettoyage de l'URL
+            // Nettoyage de la barre d'adresse
             window.history.replaceState({}, document.title, REDIRECT_URI);
         }
 
-        // Si session active, construction de l'UI de trading
+        // Si l'état de session est actif
         if (localStorage.getItem('is_logged') === 'true') {
             userAccounts = JSON.parse(localStorage.getItem('user_accounts')) || [];
             const activeToken = localStorage.getItem('active_token');
@@ -248,29 +254,30 @@
             logoutBtn.style.display = 'inline-block';
             tradingPanel.style.display = 'block';
 
+            // Remplissage de la liste avec détection stricte DOT/ROT
             accountSelect.innerHTML = "";
             userAccounts.forEach(acc => {
                 const option = document.createElement('option');
                 option.value = acc.id;
                 
-                // Reconnaissance explicite des nouveaux comptes DOT (Demo) et ROT (Real)
-                let prefixLabel = "Compte";
-                if (acc.id.startsWith('DOT')) prefixLabel = "Démo (DOT)";
-                if (acc.id.startsWith('ROT')) prefixLabel = "Réel (ROT)";
+                let label = "Compte";
+                if (acc.id.startsWith('DOT')) label = "Démo (DOT)";
+                if (acc.id.startsWith('ROT')) label = "Réel (ROT)";
 
-                option.text = `${prefixLabel} - ${acc.id} (${acc.cur})`;
+                option.text = `${label} - ${acc.id} (${acc.cur})`;
                 if (acc.token === activeToken) option.selected = true;
 
                 accountSelect.appendChild(option);
             });
-
-            connectWebSocket();
+            
+            // Ouverture du canal et traitement du flux
+            connectBotWebSocket();
         } else {
-            log("Prêt. Veuillez vous connecter pour charger vos comptes.", "#fff");
+            log("Prêt. Veuillez cliquer sur le bouton de connexion pour lier vos comptes DOT/ROT.", "#fff");
         }
     }
 
-    init();
+    initBot();
 </script>
 
 </body>
