@@ -7,26 +7,26 @@
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: #fff; padding: 20px; }
         .container { max-width: 600px; margin: auto; background: #1a1a1a; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        h2 { color: #ff444f; border-bottom: 1px solid #333; padding-bottom: 10px; margin-top: 0; }
         h3 { color: #ccc; margin-top: 20px; border-bottom: 1px solid #222; padding-bottom: 5px; }
         .btn { background: #ff444f; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn:hover { background: #e03a44; }
         .btn-logout { background: #555; margin-left: 10px; }
         
-        /* Styles pour l'interface de trading */
+        /* Panneau de trading style DTrader */
         .panel-trading { background: #222; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #2a2a2a; }
         .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px; }
         label { font-size: 14px; color: #aaa; }
         select, input { background: #2a2a2a; border: 1px solid #444; color: white; padding: 10px; border-radius: 4px; font-size: 15px; }
         select:focus, input:focus { border-color: #ff444f; outline: none; }
         .trade-actions { display: flex; gap: 15px; margin-top: 15px; }
-        .btn-trade { flex: 1; padding: 15px; font-size: 18px; text-transform: uppercase; }
+        .btn-trade { flex: 1; padding: 15px; font-size: 18px; text-transform: uppercase; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
         .btn-rise { background: #2e7d32; }
         .btn-rise:hover { background: #1b5e20; }
         .btn-fall { background: #c62828; }
         .btn-fall:hover { background: #b71c1c; }
 
-        #log-box { background: #000; color: #0f0; padding: 15px; height: 300px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; }
+        #log-box { background: #000; color: #0f0; padding: 15px; height: 300px; overflow-y: auto; font-family: monospace; border-radius: 4px; margin-top: 15px; font-size: 13px; border: 1px solid #333; }
         .status { font-weight: bold; padding: 5px; display: inline-block; border-radius: 3px; }
         .online { background: #2e7d32; }
         .offline { background: #c62828; }
@@ -35,7 +35,7 @@
 <body>
 
 <div class="container">
-    <h2>Deriv Bot Hub (API v2 Public Flux)</h2>
+    <h2>Deriv Bot Hub (API v2 Hybride REST/WS)</h2>
     
     <div>
         <p>Statut WebSocket : <span id="status" class="status offline">Déconnecté</span></p>
@@ -47,7 +47,7 @@
         <h3>Configuration de l'ordre</h3>
         
         <div class="form-group">
-            <label for="account-select">Sélection du Compte (<span style="color:#ffea00;">DOT</span> / <span style="color:#00e676;">ROT</span>)</label>
+            <label for="account-select">Sélection du Compte (Nomenclature DOT / ROT)</label>
             <select id="account-select">
                 </select>
         </div>
@@ -58,17 +58,16 @@
         </div>
 
         <div class="trade-actions">
-            <button id="btn-rise" class="btn btn-trade btn-rise">▲ Rise</button>
-            <button id="btn-fall" class="btn btn-trade btn-fall">▼ Fall</button>
+            <button id="btn-rise" class="btn-trade btn-rise">▲ Rise</button>
+            <button id="btn-fall" class="btn-trade btn-fall">▼ Fall</button>
         </div>
     </div>
 
-    <h3>Flux de Marché (Ticks en direct)</h3>
-    <div id="log-box">Initialisation du flux public...</div>
+    <h3>Flux de Marché & Logs d'exécution</h3>
+    <div id="log-box">Initialisation du système...</div>
 </div>
 
 <script>
-    // 1. Configuration stricte de l'application
     const CLIENT_ID = '33wQvUCQCGhOHXHJACSpO'; 
     const REDIRECT_URI = 'https://demelakoutou-debug.github.io/essaindex/'; 
 
@@ -83,7 +82,7 @@
     const logBox = document.getElementById('log-box');
 
     let ws = null;
-    let userAccounts = []; 
+    let accessToken = null;
 
     function log(msg, color = '#0f0') {
         const time = new Date().toLocaleTimeString();
@@ -91,14 +90,43 @@
         logBox.scrollTop = logBox.scrollHeight;
     }
 
+    // --- OUTILS PKCE (Garde ton authenticité de départ) ---
+    function generateRandomString(length) {
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+        let text = '';
+        for (let i = 0; i < length; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
+    }
+
+    async function generateCodeChallenge(codeVerifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(codeVerifier);
+        const digest = await window.crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode(...new Uint8Array(digest)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
     // --- BOUTON DE CONNEXION OAUTH2 RECORRIGÉ ---
-    authBtn.addEventListener('click', () => {
-        // Changement critique : Utilisation des paramètres client_id et redirect_uri standard 
-        // pour que Deriv renvoie directement les tokens des comptes dans l'URL sans rejeter la requête.
+    authBtn.addEventListener('click', async () => {
+        const state = generateRandomString(16);
+        const codeVerifier = generateRandomString(64);
+        const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+        sessionStorage.setItem('oauth_state', state);
+        sessionStorage.setItem('oauth_verifier', codeVerifier);
+
+        const scope = 'trade';
+
         const oauthUrl = `https://auth.deriv.com/oauth2/auth` + 
-                         `?client_id=${CLIENT_ID}` +
+                         `?response_type=code` +
+                         `&client_id=${CLIENT_ID}` +
                          `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-                         `&l=fr`;
+                         `&scope=${scope}` +
+                         `&state=${state}` +
+                         `&code_challenge=${codeChallenge}` +
+                         `&code_challenge_method=S256`;
 
         log("Redirection vers la mire d'autorisation officielle...", "#ffea00");
         window.location.href = oauthUrl;
@@ -106,58 +134,141 @@
 
     // --- DÉCONNEXION ---
     logoutBtn.addEventListener('click', () => {
-        localStorage.clear();
         sessionStorage.clear();
+        localStorage.clear();
         window.location.href = REDIRECT_URI;
     });
 
-    // --- SOCKET PRIVÉE PERMETTANT L'EXÉCUTION DES TRADES ---
-    function connectBotWebSocket() {
-        log("Connexion à l'écosystème WebSocket de Deriv...", "#ffea00");
-        
-        // Utilisation de la passerelle de communication unifiée pour les transactions privées
-        ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${CLIENT_ID}`);
+    // --- ÉTAPE 1 & 2 : RÉCUPÉRATION ET ENREGISTREMENT DES COMPTES (REST) ---
+    async function fetchDerivAccounts() {
+        log("Récupération de la liste des comptes de trading via l'API REST...", "#ffea00");
+        try {
+            const response = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Deriv-App-ID': CLIENT_ID
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`Erreur HTTP : ${response.status}`);
+            }
+
+            const accounts = await response.json();
+            accountSelect.innerHTML = "";
+
+            if (!accounts || accounts.length === 0) {
+                log("Aucun compte actif trouvé. Tentative de création d'un compte de test...", "#ffea00");
+                // Optionnel : Étape 2 automatique si aucun compte n'est retourné
+                await createDerivAccount('demo');
+                return fetchDerivAccounts(); // Recharge la liste
+            }
+
+            accounts.forEach(acc => {
+                const option = document.createElement('option');
+                option.value = acc.account_id; // Cet ID sert pour l'appel OTP
+                
+                let label = acc.account_type === 'demo' ? "Démo (DOT)" : "Réel (ROT)";
+                option.text = `${label} - ${acc.account_id} (${acc.currency || 'USD'})`;
+                accountSelect.appendChild(option);
+            });
+
+            // Afficher l'interface de trading
+            tradingPanel.style.display = 'block';
+
+            // Établir directement la connexion pour le premier compte de la liste
+            if(accountSelect.value) {
+                switchAccountSession(accountSelect.value);
+            }
+
+        } catch (error) {
+            log(`Impossible de récupérer vos comptes : ${error.message}`, "#ff1744");
+        }
+    }
+
+    // ÉTAPES UNIQUE 2 : CRÉATION DU COMPTE SI ABSENT
+    async function createDerivAccount(type) {
+        try {
+            await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Deriv-App-ID': CLIENT_ID,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ currency: "USD", group: "row", account_type: type })
+            });
+        } catch(e) {
+            console.error("Erreur création compte préventif", e);
+        }
+    }
+
+    // --- ÉTAPE 3 & 4 : DEMANDE DE L'OTP ET OUVERTURE DE LA WEBSOCKET PRIVÉE ---
+    async function switchAccountSession(accountId) {
+        if (ws) {
+            log("Fermeture de la session précédente...", "#aaa");
+            ws.close();
+        }
+
+        log(`Demande d'un OTP pour le compte ${accountId}...`, "#ffea00");
+
+        try {
+            const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Deriv-App-ID': CLIENT_ID
+                }
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error?.message || `Erreur HTTP ${response.status}`);
+            }
+
+            const otpData = await response.json();
+            
+            // L'API renvoie l'URL WebSocket authentifiée sous la clé otpData.url
+            if (otpData && otpData.url) {
+                log("OTP validé. Ouverture du canal WebSocket sécurisé...", "#00e676");
+                openAuthenticatedWebSocket(otpData.url);
+            } else {
+                throw new Error("L'API n'a renvoyé aucune URL valide.");
+            }
+
+        } catch (error) {
+            log(`Échec de la bascule de session (OTP) : ${error.message}`, "#ff1744");
+        }
+    }
+
+    // --- OUVERTURE DE LA WS AUTHENTIFIÉE SANS ENVOI DE MESSAGE 'AUTHORIZE' ---
+    function openAuthenticatedWebSocket(wsUrl) {
+        ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             statusEl.className = "status online";
-            statusEl.innerText = "En ligne";
-            log("WebSocket connectée avec succès !", "#00e676");
-            
-            // Envoyer la demande d'autorisation avec le Token actif du compte sélectionné
-            const activeToken = localStorage.getItem('active_token');
-            if (activeToken) {
-                log("Authentification de la session de trading...", "#ffea00");
-                ws.send(JSON.stringify({ authorize: activeToken }));
-            }
+            statusEl.innerText = "En ligne (Sécurisé)";
+            log("Connexion WebSocket établie et pré-authentifiée !", "#00e676");
+
+            // Souscription immédiate au flux public/privé de ticks
+            ws.send(JSON.stringify({ ticks: 'R_100' }));
         };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            // 1. Réponse à la demande d'autorisation
-            if (data.msg_type === 'authorize') {
-                if (data.error) {
-                    log(`Erreur d'authentification : ${data.error.message}`, "#ff1744");
-                    return;
-                }
-                log(`Session validée pour le compte de trading !`, "#00e676");
-                
-                // Souscription aux Ticks du Volatility 100
-                log("Souscription aux ticks en direct pour le Volatility 100...", "#ffea00");
-                ws.send(JSON.stringify({ ticks: 'R_100' }));
-            }
-
-            // 2. Réception du flux de prix en direct
+            // Gestion des ticks
             if (data.msg_type === 'tick' && data.tick) {
-                if (Math.random() > 0.6) { // Limite la surcharge graphique dans ton log-box
-                    log(`[${data.tick.symbol}] Prix Spot : ${data.tick.quote}`, "#fff");
+                if (Math.random() > 0.7) { 
+                    log(`[${data.tick.symbol}] Prix Actuel : ${data.tick.quote}`, "#fff");
                 }
             }
 
-            // 3. Réception de la confirmation d'achat (Rise / Fall)
+            // Gestion des retours d'achats (Rise / Fall)
             if (data.msg_type === 'buy') {
                 if (data.error) {
-                    log(`❌ Échec de l'ordre : ${data.error.message}`, "#ff1744");
+                    log(`❌ Échec de la transaction : ${data.error.message}`, "#ff1744");
                 } else {
                     log(`✅ Contrat validé ! ID : ${data.buy.contract_id}`, "#00e676");
                     log(`${data.buy.longcode}`, "#aaa");
@@ -166,20 +277,25 @@
         };
 
         ws.onerror = (error) => {
-            log("Erreur sur la WebSocket.", "#ff1744");
+            log("Erreur critique détectée sur la WebSocket.", "#ff1744");
         };
 
         ws.onclose = () => {
             statusEl.className = "status offline";
             statusEl.innerText = "Déconnecté";
-            log("Connexion WebSocket fermée.", "#ff1744");
+            log("WebSocket fermée.", "#ff1744");
         };
     }
 
-    // --- EXECUTION DE L'ACHAT SUR LE MARCHÉ ---
+    // --- GESTION DU TRADING (RISE / FALL) ---
     function placeOrder(contractType) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            log("Erreur : La WebSocket n'est pas connectée.", "#ff1744");
+            return;
+        }
+
         const stake = parseFloat(stakeInput.value);
-        log(`Envoi de l'ordre ${contractType === 'CALL' ? 'Rise' : 'Fall'} (${stake}$)...`, "#ffea00");
+        log(`Envoi du contrat ${contractType === 'CALL' ? 'Rise' : 'Fall'} (Stake: ${stake}$)...`, "#ffea00");
 
         const payload = {
             buy: 1,
@@ -187,93 +303,55 @@
             parameters: {
                 amount: stake,
                 basis: 'stake',
-                contract_type: contractType, // 'CALL' = Rise, 'PUT' = Fall
+                contract_type: contractType, // 'CALL' pour Rise, 'PUT' pour Fall
                 currency: 'USD',
                 duration: 1,
-                duration_unit: 't', // 1 Tick
-                symbol: 'R_100'     // Volatility 100 Index
+                duration_unit: 't', // Exécution en 1 tick
+                symbol: 'R_100'
             }
         };
+
         ws.send(JSON.stringify(payload));
     }
 
     btnRise.addEventListener('click', () => placeOrder('CALL'));
     btnFall.addEventListener('click', () => placeOrder('PUT'));
 
-    // --- ÉCOUTEUR DU SÉLECTEUR DE COMPTE ---
+    // --- SUR CHANGEMENT DE COMPTE DANS L'UI (SELECT) ---
     accountSelect.addEventListener('change', (e) => {
-        const selectedId = e.target.value;
-        const targetAccount = userAccounts.find(acc => acc.id === selectedId);
-        
-        if (targetAccount) {
-            log(`Bascule vers l'environnement : ${selectedId}...`, "#ffea00");
-            localStorage.setItem('active_token', targetAccount.token);
-            
-            // On réinitialise la connexion pour s'autoriser avec le jeton du nouveau compte
-            if (ws) ws.close();
-            connectBotWebSocket();
-        }
+        switchAccountSession(e.target.value);
     });
 
     // --- INITIALISATION AU CHARGEMENT DE LA PAGE ---
     function initBot() {
         logBox.innerHTML = "";
         const urlParams = new URLSearchParams(window.location.search);
-        
-        let index = 1;
-        let hasParams = false;
-        let extractedAccounts = [];
+        const code = urlParams.get('code');
+        const state = urlParams.get('state');
 
-        // Lecture des comptes (acct1, token1, acct2, token2...) retournés par l'URL officielle
-        while (urlParams.get(`acct${index}`)) {
-            hasParams = true;
-            const id = urlParams.get(`acct${index}`);
-            const token = urlParams.get(`token${index}`);
-            const cur = urlParams.get(`cur${index}`) || 'USD';
-
-            extractedAccounts.push({ id, token, cur });
-            index++;
-        }
-
-        // Si l'utilisateur arrive de la mire avec les paramètres d'authentification
-        if (hasParams) {
-            localStorage.setItem('user_accounts', JSON.stringify(extractedAccounts));
-            localStorage.setItem('active_token', extractedAccounts[0].token);
+        if (code && state) {
+            const savedState = sessionStorage.getItem('oauth_state');
+            if (state !== savedState) {
+                log("Échec : Le paramètre state ne correspond pas.", "#ff1744");
+                return;
+            }
+            
+            log("Authentification approuvée par Deriv !", "#00e676");
+            localStorage.setItem('access_token', code);
             localStorage.setItem('is_logged', 'true');
             
-            // Nettoyage de la barre d'adresse
             window.history.replaceState({}, document.title, REDIRECT_URI);
         }
 
-        // Si l'état de session est actif
         if (localStorage.getItem('is_logged') === 'true') {
-            userAccounts = JSON.parse(localStorage.getItem('user_accounts')) || [];
-            const activeToken = localStorage.getItem('active_token');
-
+            accessToken = localStorage.getItem('access_token');
             authBtn.style.display = 'none';
             logoutBtn.style.display = 'inline-block';
-            tradingPanel.style.display = 'block';
-
-            // Remplissage de la liste avec détection stricte DOT/ROT
-            accountSelect.innerHTML = "";
-            userAccounts.forEach(acc => {
-                const option = document.createElement('option');
-                option.value = acc.id;
-                
-                let label = "Compte";
-                if (acc.id.startsWith('DOT')) label = "Démo (DOT)";
-                if (acc.id.startsWith('ROT')) label = "Réel (ROT)";
-
-                option.text = `${label} - ${acc.id} (${acc.cur})`;
-                if (acc.token === activeToken) option.selected = true;
-
-                accountSelect.appendChild(option);
-            });
             
-            // Ouverture du canal et traitement du flux
-            connectBotWebSocket();
+            // On lance l'étape 1 (REST)
+            fetchDerivAccounts();
         } else {
-            log("Prêt. Veuillez cliquer sur le bouton de connexion pour lier vos comptes DOT/ROT.", "#fff");
+            log("Prêt. Veuillez vous connecter avec le bouton pour démarrer l'autorisation OTP.", "#fff");
         }
     }
 
